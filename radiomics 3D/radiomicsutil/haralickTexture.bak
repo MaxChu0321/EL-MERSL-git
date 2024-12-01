@@ -1,0 +1,374 @@
+import numpy as np
+import pandas as pd
+import cv2
+from skimage.feature import graycomatrix
+
+'''
+The functions you can call:
+    get_grayCoOcMats, Energy, Contrast, Correlation, Var, SumOfVar, DiffOfVar, Entropy, SumOfEntropy, 
+    DiffOfEntropy, SumOfAvg, InverOfDiff, InverOfDiffNorm, Homogeneity, InverOfDiffMomentNorm, Autocorrelation, 
+    Dissimilarity, ClusterShade, ClusterProminence, MaxProba, MaxCorrelateCoeffi, InfoOfCorrelate1, 
+    InfoOfCorrelate2, HaralickTextures, All_Properties
+
+FOR get_grayCoOcMats:
+    inputs:
+        image: 
+            (array_like)
+            A 2D gray-scale image.
+        gray_level: 
+            (int)
+            The number of gray-levels counted.
+            The shape of one grayCoOcMat is (gray_level, gray_level).
+            Default is None. It should be 16, 32, or other values.
+        distances: 
+            (array_like)
+            A list of pixel pair distance offsets.
+            Default is [1, 2, 3, 4, 5].
+        angles: 
+            (array_like)
+            A list of pixel pair angles in radians.
+            Default is [0, np.pi/4, np.pi/2, 3*np.pi/4].
+    outputs:
+        A set of gray co-occurance matrices.
+        The number of matrix is depending on how many distances(d) and angles(theta) you set.
+        The shape of outputs is (gray_level, gray_level, d, theta).   # d=len(distances)  # theta=len(angles)
+        If you want to calculate the features, you must choose one matrix at a time as the input of the following functions.
+
+FOR other functions:
+    input:
+        CoOcMat: 
+            (array_like)
+            A 2D gray co-occurance matrix.
+            The shape is (gray_level, gray_level).
+    outputs:
+        The value of haralick textures depending on what function you call.
+'''
+class HaralickTextureFeaturesExtractor:
+    def __init__(self, img, contour, gray_level) -> None:
+        BRx, BRy, BRw, BRh = cv2.boundingRect(contour)
+        self.img = img
+        self.b_img = self.img[BRy:BRy+BRh, BRx:BRx+BRw]
+        self.gray_level = gray_level
+        self.CoOcMat = self.get_grayCoOcMats()
+
+    def get_grayCoOcMats(self, distances=[1, 2, 3, 4, 5], angles=[0, np.pi/4, np.pi/2, 3*np.pi/4]):
+        arr = self.b_img.copy()
+        max_gray = arr.max()
+        arr = arr.astype(np.float64)
+        arr = (arr / max_gray) * (self.gray_level-1)
+        arr = arr.astype(int)
+        matrices = graycomatrix(arr, distances, angles, levels=self.gray_level, normed=True)
+        return matrices
+    
+    def _get_colMat_rowMat(self):
+        gray_level = self.CoOcMat.shape[0]
+        colMat, rowMat = np.meshgrid(range(1, gray_level+1), range(1, gray_level+1))
+        return colMat, rowMat
+    
+    def _get_Px_Py(self):
+        Px = np.sum(self.CoOcMat, axis=1)
+        Py = np.sum(self.CoOcMat, axis=0)
+        return Px, Py
+
+    def _get_MUx_MUy(self):
+        colMat, rowMat = self._get_colMat_rowMat()
+        MUx = np.sum(rowMat * self.CoOcMat[:][:])
+        MUy = np.sum(colMat * self.CoOcMat[:][:])
+        return MUx, MUy
+
+    def _get_sigmaX_sigmaY(self):
+        colMat, rowMat = self._get_colMat_rowMat()
+        MUx, MUy = self._get_MUx_MUy()
+        sigmaX = np.sum((rowMat-MUx)**2 * self.CoOcMat[:][:])
+        sigmaY = np.sum((colMat-MUy)**2 * self.CoOcMat[:][:])
+        return sigmaX, sigmaY
+    
+    def _get_Px_plus_y(self):
+        Px_plus_y = []
+        gray_level = self.CoOcMat.shape[0]
+        for k in range(2, 2*gray_level+1):
+            temp = 0
+            for i in range(1, gray_level+1):
+                j = k-i
+                if j <= 0: break
+                elif j >= (gray_level+1): continue
+                else: temp += self.CoOcMat[i-1][j-1]
+            Px_plus_y.append(temp)
+        return Px_plus_y
+
+    def _get_Px_minus_y(self):
+        Px_minus_y = []
+        gray_level = self.CoOcMat.shape[0]
+        for k in range(gray_level):
+            temp = 0
+            m = -k
+            for i in range(1, gray_level+1):
+                j = i-k
+                if j <= 0: continue
+                else: temp += self.CoOcMat[i-1][j-1]
+            if k == 0: 
+                Px_minus_y.append(temp)
+                continue
+            for i in range(1, gray_level+1):
+                j = i-m
+                if j >= 17: break
+                else: temp += self.CoOcMat[i-1][j-1]
+            Px_minus_y.append(temp)
+        return Px_minus_y
+
+    def _get_HX_HY(self):
+        HX, HY = 0, 0
+        gray_level = self.CoOcMat.shape[0]
+        Px, Py = self._get_Px_Py()
+        for i in range(gray_level):
+            if Px[i] <= 0: continue
+            HX += (Px[i] * np.log2(Px[i]))
+        for j in range(gray_level):
+            if Py[j] <= 0: continue
+            HY += (Py[j] * np.log2(Py[j]))
+        HX, HY = -HX, -HY
+        return HX, HY
+
+    def _get_HXY_HXY1_HXY2(self):
+        HXY, HXY1, HXY2 = 0, 0, 0
+        gray_level = self.CoOcMat.shape[0]
+        Px, Py = self._get_Px_Py()
+        for i in range(gray_level):
+            for j in range(gray_level):
+                if self.CoOcMat[i][j] <= 0: continue
+                HXY += (self.CoOcMat[i][j] * np.log2(self.CoOcMat[i][j]))
+
+        for i in range(gray_level):
+            for j in range(gray_level):
+                temp = Px[i]*Py[j]
+                if temp <= 0: continue
+                HXY1 += (self.CoOcMat[i][j] * np.log2(temp))
+
+        for i in range(gray_level):
+            for j in range(gray_level):
+                temp = Px[i]*Py[j]
+                if temp <= 0: continue
+                HXY2 += (temp * np.log2(temp))
+        HXY, HXY1, HXY2 = -HXY, -HXY1, -HXY2
+        return HXY, HXY1, HXY2
+    
+    '''
+    The following functions calculate the haralick textures of input matrix respectively.
+    You can call the function "All_Properties" to get all the haralick textures of input matrix at one time.
+    The output of the function "All_Properties" is in a list format.
+    '''
+
+    # Energy
+    def Energy(self):
+        f_1 = np.sum(self.CoOcMat[:][:]**2)
+        return f_1
+
+    # Contrast
+    def Contrast(self):
+        f_2 = 0
+        gray_level = self.CoOcMat.shape[0]
+        for n in range(1, gray_level):
+            m = -n
+            temp = 0
+            for i in range(1, gray_level+1):
+                j = i-n
+                if j <= 0: continue
+                temp += self.CoOcMat[i-1][j-1]
+            for i in range(1, gray_level+1):
+                jj = i-m
+                if jj >= (gray_level+1): break
+                temp += self.CoOcMat[i-1][j-1]
+            f_2 += (n**2 * temp)
+        return f_2
+
+    # Correlation
+    def Correlation(self):
+        colMat, rowMat = self._get_colMat_rowMat()
+        MUx, MUy = self._get_MUx_MUy()
+        sigmaX, sigmaY = self._get_sigmaX_sigmaY()
+        f_3 = (np.sum(rowMat*colMat*self.CoOcMat[:][:]) - MUx*MUy) / (sigmaX*sigmaY)
+        return f_3
+
+    # Variance
+    def Var(self):
+        colMat, rowMat = self._get_colMat_rowMat()
+        f_4 = np.sum((rowMat - np.mean(self.CoOcMat[:][:]))**2 * self.CoOcMat[:][:])
+        return f_4
+
+    # Sum Variance
+    def SumOfVar(self):
+        gray_level = self.CoOcMat.shape[0]
+        Px_plus_y = self._get_Px_plus_y()
+        k = np.array(range(2, 2*gray_level+1))
+        f_5 = np.sum((k-np.mean(Px_plus_y))**2 * Px_plus_y)
+        return f_5
+
+    # Difference Variance
+    def DiffOfVar(self):
+        gray_level = self.CoOcMat.shape[0]
+        Px_minus_y = self._get_Px_minus_y()
+        k = np.array(range(gray_level))
+        f_6 = np.sum((k-np.mean(Px_minus_y))**2 * Px_minus_y)
+        return f_6
+
+    # Entropy
+    def Entropy(self):
+        f_7 = 0
+        gray_level = self.CoOcMat.shape[0]
+        for i in range(gray_level):
+            for j in range(gray_level):
+                if self.CoOcMat[i][j] <= 0: continue
+                f_7 += (self.CoOcMat[i][j] * np.log2(self.CoOcMat[i][j]))
+        f_7 = -f_7
+        return f_7
+
+    # Sum Entropy
+    def SumOfEntropy(self):
+        f_8 = 0
+        gray_level = self.CoOcMat.shape[0]
+        Px_plus_y = self._get_Px_plus_y()
+        for k in range(2*gray_level-1):
+            if Px_plus_y[k] <= 0: continue
+            f_8 += (Px_plus_y[k] * np.log2(Px_plus_y[k]))
+        f_8 = -f_8
+        return f_8
+
+    # Difference Entropy
+    def DiffOfEntropy(self):
+        f_9 = 0
+        gray_level = self.CoOcMat.shape[0]
+        Px_minus_y = self._get_Px_minus_y()
+        for k in range(gray_level):
+            if Px_minus_y[k] <= 0: continue
+            f_9 += (Px_minus_y[k] * np.log2(Px_minus_y[k]))
+        f_9 = -f_9
+        return f_9
+
+    # Sum Average
+    def SumOfAvg(self):
+        gray_level = self.CoOcMat.shape[0]
+        Px_plus_y = self._get_Px_plus_y()
+        k = np.array(range(2, 2*gray_level+1))
+        f_10 = np.sum(k * Px_plus_y)
+        return f_10
+
+    # Inverse Difference
+    def InverOfDiff(self):
+        colMat, rowMat = self._get_colMat_rowMat()
+        f_11 = np.sum(self.CoOcMat[:][:] / (1 + np.abs(rowMat-colMat)))
+        return f_11
+
+    # Inverse Difference Normalized
+    def InverOfDiffNorm(self):
+        gray_level = self.CoOcMat.shape[0]
+        colMat, rowMat = self._get_colMat_rowMat()
+        f_12 = np.sum(self.CoOcMat[:][:] / (1 + np.abs(rowMat-colMat)/gray_level))
+        return f_12
+
+    # Homogeneity
+    def Homogeneity(self):
+        colMat, rowMat = self._get_colMat_rowMat()
+        f_13 = np.sum(self.CoOcMat[:][:] / (1 + (rowMat-colMat)**2))
+        return f_13
+
+    # Inverse Difference Moment Normalized
+    def InverOfDiffMomentNorm(self):
+        gray_level = self.CoOcMat.shape[0]
+        colMat, rowMat = self._get_colMat_rowMat()
+        f_14 = np.sum(self.CoOcMat[:][:] / (1 + (rowMat-colMat)**2 / gray_level**2))
+        return f_14
+
+    # Autocorrelation
+    def Autocorrelation(self):
+        colMat, rowMat = self._get_colMat_rowMat()
+        f_15 = np.sum(rowMat * colMat * self.CoOcMat[:][:])
+        return f_15
+
+    # Dissimilarity
+    def Dissimilarity(self):
+        colMat, rowMat = self._get_colMat_rowMat()
+        f_16 = np.sum(np.abs(rowMat - colMat) * self.CoOcMat[:][:])
+        return f_16
+
+    # Cluster Shade
+    def ClusterShade(self):
+        MUx, MUy = self._get_MUx_MUy()
+        colMat, rowMat = self._get_colMat_rowMat()
+        f_17 = np.sum((rowMat + colMat - MUx - MUy)**3 * self.CoOcMat[:][:])
+        return f_17
+
+    # Cluster Prominence
+    def ClusterProminence(self):
+        MUx, MUy = self._get_MUx_MUy()
+        colMat, rowMat = self._get_colMat_rowMat()
+        f_18 = np.sum((rowMat + colMat - MUx - MUy)**4 * self.CoOcMat[:][:])
+        return f_18
+
+    # Max Probability
+    def MaxProba(self):
+        f_19 = np.max(self.CoOcMat[:][:])
+        return f_19
+
+    # Max Correlation Coefficient
+    def MaxCorrelateCoeffi(self):
+        gray_level = self.CoOcMat.shape[0]
+        Px, Py = self._get_Px_Py()
+        Q = np.zeros([gray_level, gray_level])
+        for i in range(gray_level):
+            for j in range(gray_level):
+                temp = (self.CoOcMat[i][:] * self.CoOcMat[j][:]) / (Px[i]*Py[:])
+                temp = temp[np.logical_not(np.isnan(temp))]
+                Q[i][j] = np.sum(temp)
+        eigvals_list = np.linalg.eigvals(Q)
+        eigvals_list[eigvals_list == np.max(eigvals_list)] = 0
+        f_20 = np.sqrt(np.max(eigvals_list))
+        return f_20
+
+    # Information Measures Correlation 1
+    def InfoOfCorrelate1(self):
+        HX, HY = self._get_HX_HY()
+        HXY, HXY1, HXY2 = self._get_HXY_HXY1_HXY2()
+        f_21 = (HXY-HXY1) / max(HX, HY)
+        return f_21
+
+    # Information Measures Correlation 2
+    def InfoOfCorrelate2(self):
+        HXY, HXY1, HXY2 = self._get_HXY_HXY1_HXY2()
+        f_22 = np.sqrt(1 - np.exp((-2.0) * (HXY2-HXY)))
+        return f_22
+    
+    # All Features
+    def all(self, feature_prefix=''):
+        haralick_textures = ['energy', 'contrast', 'correlation', 'var', 'sumOfVar', 'diffOfVar', 
+                            'entropy', 'sumOfEntropy', 'diffOfEntropy', 'sumOfAvg', 'inverOfDiff', 
+                            'inverOfDiffNorm', 'homogeneity', 'inverOfDiffMomentNorm,autocorrelation', 
+                            'dissimilarity', 'clusterShade', 'clusterProminence', 'maxProba', 'maxCorrelateCoeffi', 'infoOfCorrelate1', 'infoOfCorrelate2', 'haralickTextures']
+        for idx, h in enumerate(haralick_textures): haralick_textures[idx] = f"{feature_prefix}_{h}"
+
+        energy = self.Energy()
+        contrast = self.Contrast()
+        correlation = self.Correlation()
+        var = self.Var()
+        sumOfVar = self.SumOfVar()
+        diffOfVar = self.DiffOfVar()
+        entropy = self.Entropy()
+        sumOfEntropy = self.SumOfEntropy()
+        diffOfEntropy = self.DiffOfEntropy()
+        sumOfAvg = self.SumOfAvg()
+        inverOfDiff = self.InverOfDiff()
+        inverOfDiffNorm = self.InverOfDiffNorm()
+        homogeneity = self.Homogeneity()
+        inverOfDiffMomentNorm = self.InverOfDiffMomentNorm()
+        autocorrelation = self.Autocorrelation()
+        dissimilarity = self.Dissimilarity()
+        clusterShade = self.ClusterShade()
+        clusterProminence = self.ClusterProminence()
+        maxProba = self.MaxProba()
+        maxCorrelateCoeffi = self.MaxCorrelateCoeffi()
+        infoOfCorrelate1 = self.InfoOfCorrelate1()
+        infoOfCorrelate2 = self.InfoOfCorrelate2()
+
+        return pd.DataFrame([[energy, contrast, correlation, var, sumOfVar, diffOfVar, entropy, sumOfEntropy, 
+                        diffOfEntropy, sumOfAvg, inverOfDiff, inverOfDiffNorm, homogeneity, inverOfDiffMomentNorm,
+                        autocorrelation, dissimilarity, clusterShade, clusterProminence, maxProba, 
+                        maxCorrelateCoeffi, infoOfCorrelate1, infoOfCorrelate2]], columns=haralick_textures)
